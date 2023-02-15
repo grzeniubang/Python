@@ -1,0 +1,306 @@
+
+import pathlib as pathlib
+import os
+import glob
+import codecs
+import re
+
+#### Script INPUT Variables ####
+# Path of input folder
+input_path = '..\Input'
+# Path of output folder
+output_path = '..\Output'
+# Files to find in input folder
+file_type = '*.properties'
+# special language files were manual adjustments needed
+special_languages = ['CHT', 'ZHH', 'NLB', 'PTB', 'ENU']
+# 'Database' file
+language_mapping_file_path = '..\locales\language_code_mapping.txt'
+language_headunit_mapping_file_path = '..\locales\language_code_mapping_HEADUNIT.txt'
+
+
+def get_delivered_language_codes(path, template_name):
+    language_codes = []
+    for input_file in pathlib.Path(path).glob('*' + template_name + '*'):
+        filename = os.path.basename(input_file)
+        split_file_names = filename.rpartition('_XXX')
+        language_codes.append(split_file_names[0].rpartition('_')[2])
+    return language_codes
+
+
+def language_code_mapping(path_to_file, delivered_language_code):
+    language_map = {}
+    languages_to_be_created = []
+    file_content = open(path_to_file, 'r', encoding='UTF-8')
+    for line in file_content:
+        mapping = line.split(':')
+        language_map[mapping[0]] = mapping[1].rstrip('\n')
+    for entry in delivered_language_code:
+        if entry in language_map.keys():
+            languages_to_be_created.append(language_map[entry])
+        else:
+            print(entry, '''is not a language code that can be mapped to CusMeS language codes. Please remove the file 
+            and clearify. Afterwards clear the output folder and rerun the script''')
+            quit(400)
+    return languages_to_be_created
+
+
+def language_code_headunit_mapping(path_to_file, delivered_language_code):
+    language_map = {}
+    languages_to_be_created = []
+    file_content = open(path_to_file, 'r', encoding='UTF-8')
+    from collections import defaultdict
+    language_map = defaultdict(list)
+    error_flag=0
+    for line in file_content:
+        mapping = line.split(':')
+        language_map[mapping[0]].append(mapping[1].rstrip('\n'))
+
+    for entry in delivered_language_code:
+        if entry in language_map.keys():
+            languages_to_be_created.append(language_map[entry])
+        else:
+            print(entry, '''is not a language code that can be mapped to CusMeS language codes. Please remove the file
+            and clearify. Afterwards clear the output folder and rerun the script''')
+            error_flag+=1
+    if error_flag>0:
+        quit(400)
+    return languages_to_be_created
+
+def remove_bom(path_to_input_files, file_type_selector):
+    bom_lenght = len(codecs.BOM_UTF8)
+    buffsize = 4096
+    bom_counter = 0
+    for input_file in pathlib.Path(path_to_input_files).glob(file_type_selector):
+        with open(input_file, "r+b") as fp:
+            chunk = fp.read(buffsize)
+            if chunk.startswith(codecs.BOM_UTF8):
+                i = 0
+                chunk = chunk[bom_lenght:]
+                while chunk:
+                    fp.seek(i)
+                    fp.write(chunk)
+                    i += len(chunk)
+                    fp.seek(bom_lenght, os.SEEK_CUR)
+                    chunk = fp.read(buffsize)
+                fp.seek(-bom_lenght, os.SEEK_CUR)
+                fp.truncate()
+                bom_counter += 1
+                print('BOM Removed', input_file)
+    return bom_counter
+
+
+def remove_empty_lines_and_comments(input_lines):
+    output_lines = []
+    for line in input_lines:
+        if line != '\n' and not line.startswith('#'):
+            output_lines.append(line)
+    return output_lines
+
+
+def remove_country_prefix(string):
+    # regex matches e.g. 'DE.' or 'AE-DU.'
+
+    if re.match('^([A-Z]{2}\.|[A-Z]{2}-[A-Z]{2}\.)', string):
+        return string.partition('.')[2]
+    else:
+        return string
+
+def remove_headunit_country_prefix(string):
+    # regex matches e.g. 'de_de.' or 'en_en.'
+    if re.match('^([a-z]{2}\.|[a-z]{2}_[a-z]{2}\.)', string):
+        return string.partition('.')[2]
+    else:
+        return string
+
+
+
+def read_properties(input_files_path, template_name, language_code_wrong):
+    delivered_filename = glob.glob(
+        input_files_path + '\\' + '*' + template_name + '*' + language_code_wrong + "*")
+    delivered_file_content = open(delivered_filename[0], 'r', encoding='UTF-8')
+    lines_without_empty_lines = remove_empty_lines_and_comments(delivered_file_content.readlines())
+    # print lines after empty lines are removed  print(lines_without_empty_lines)
+    return lines_without_empty_lines
+
+
+def write_properties_to_file(path, template_name, language_code, lines, countries_codes, headunit):
+    if headunit != 1:
+        output_file = open(path + '\\' + template_name + '_' + language_code + '.properties', 'a',
+                       encoding='UTF-8')
+        for countries_code in countries_codes:
+            output_file.write('### ' + countries_code + ' properties ###\n')
+        for line in lines:
+            # manipulate line to not include possible old country prefix and &nbsp
+            property = removeNBSP(remove_country_prefix(line))
+            if countries_code == 'GLOBAL':
+                output_file.write(property)
+            else:
+                output_file.write(countries_code + '.' + property)
+        output_file.write('\n')
+
+    else:
+        output_file = open(path + '\\' + template_name + '_en' + '.properties', 'a', encoding='UTF-8')
+        for line in lines:
+            # manipulate line to not include possible old country prefix and &nbsp
+            property = removeNBSP(remove_headunit_country_prefix(line))
+            # loop for use the same string for multi-country language, e.x. ENG
+            for code in language_code:
+                index = language_code.index(code)
+                output_file.write(language_code[index] + '.' + property)
+                output_file.write('\n')
+
+def sort_file(file_path, template_name):
+    data_list = list()
+    infile = file_path + '\\' + template_name + '_en' + '.properties'
+    with open(infile, encoding='UTF-8') as fin:
+        for line in fin:
+            data_list.append(line)
+    data_list.sort()
+    outfile = file_path + '\\' + template_name + '_en' + '_sorted' + '.properties'
+    with open(outfile, 'w', encoding='UTF-8') as fout:
+        for data in data_list:
+            fout.write(data)
+
+
+
+
+def removeNBSP(line):
+    if "&nbsp;" in line or "&nbsp" in line:
+        print("At least one &nbsp removed from", line, "one found at position", line.find("&nbsp"))
+        return line.replace("&nbsp;", " ").replace("&nbsp", " ")
+    else:
+        return line
+
+
+def manipulate_countries(language_code_wrong):
+    if language_code_wrong == "ENU":
+        return ['US']
+    if language_code_wrong == "NLB":
+        return ['BE']
+    if language_code_wrong == "PTB":
+        return ['BR']
+    if language_code_wrong == "CHT":
+        return ['TW']
+    if language_code_wrong == "ZHH":
+        return ['HK', 'MO']
+
+
+def create_file(path, template_name, language_code_cusmes, language_code_wrong, lines, countries_codes, headunit):
+    if headunit == 1:
+        write_properties_to_file(path, template_name, language_code_cusmes, lines, countries_codes, headunit)
+    else:
+        if language_code_wrong not in special_languages:
+            write_properties_to_file(path, template_name, language_code_cusmes, lines, countries_codes, headunit)
+            return False
+        else:
+            if headunit != 1:
+                if len(countries_codes) == 1 and countries_codes[0] == "GLOBAL":
+                    manipulated_countries = manipulate_countries(language_code_wrong)
+                    write_properties_to_file(path, template_name, language_code_cusmes, lines, manipulated_countries, headunit)
+                    print(language_code_wrong, 'language file', template_name, language_code_cusmes,
+                          'with additional country codes', manipulated_countries, 'created. Manual verification needed!')
+                    return False
+                else:
+                    write_properties_to_file(path, template_name, language_code_cusmes, lines, countries_codes, headunit)
+                    print(language_code_wrong, 'language file with special language code created. Manuel adjustments needed!')
+                    return True
+
+
+def ask_for_countries(language_code):
+    print('Input countryIDs for language', language_code, 'separated by comma (GLOBAL for global properties): ')
+    countriesIDs = input().split(sep=',')
+    countriesIDs = [countriesID.strip().upper() for countriesID in countriesIDs]
+    return countriesIDs
+
+
+# Script start
+print('''Welcome to CusMeS Property Converter!
+Features:
+- Remove BOM from all files in Input folder
+- Convert property files from Language Service to CusMeS Format and creates Global Properties by
+    - Renaming file
+    - Removing existing Country prefix\n''')
+
+only_bom = input('Only remove BOM from property files in Input Folder and do not convert to CusMeS format? (y/n)')
+# only BOM remove function
+if only_bom == 'y':
+    path = input('Input relative path to folder with BOM files. For default (Input folder next to script src folder) '
+                 'just press Enter: ').strip()
+    if len(path) > 0:
+        bom_amount = remove_bom(path, file_type)
+    else:
+        bom_amount = remove_bom(input_path, file_type)
+
+    print('BOM removed from', bom_amount, 'file(s)')
+
+# Property converter with BOM remove function
+else:
+    bom_amount = remove_bom(input_path, file_type)
+    print('BOM removed from', bom_amount, 'file(s)')
+    templates = input('Input template names separated by comma: ').split(sep=',')
+
+    if len(templates[0]) < 1:
+        print('Please rerun the script and enter one or more template names')
+        quit(400)
+
+    # remove spaces in input from templates
+    templates = [template.strip() for template in templates]
+    print(templates)
+    headunit_flag = input('Do you  want to create HEADUNIT properties? (y/n)')
+    manual_counter = 0
+    if headunit_flag == 'y':
+        for template in templates:
+            print("\n### START HEADUNIT template:", template, "###\n")
+            delivered_language_codes = get_delivered_language_codes(input_path, template)
+            print('Language mapping for template', template)
+            print(delivered_language_codes)
+            languages_in_cusmes_format = language_code_headunit_mapping(language_headunit_mapping_file_path, delivered_language_codes)
+            print(languages_in_cusmes_format)
+            for index, language in enumerate(languages_in_cusmes_format):
+                print("\n# START Input file:", delivered_language_codes[index], "#")
+                properties = read_properties(input_path, template, delivered_language_codes[index])
+                create_file(output_path, template, language, delivered_language_codes[index], properties, languages_in_cusmes_format, 1)
+        sort_file(output_path, template)
+    else:
+        country_specific_flag = input('Do you want to create country specific properties? (y/n)')
+
+        # iterate threw all given templates
+        for template in templates:
+            print("\n### START template:", template, "###\n")
+            delivered_language_codes = get_delivered_language_codes(input_path, template)
+            print('Language mapping for template', template)
+            print(delivered_language_codes)
+            languages_in_cusmes_format = language_code_mapping(language_mapping_file_path, delivered_language_codes)
+            print(languages_in_cusmes_format)
+            for index, language in enumerate(languages_in_cusmes_format):
+                print("\n# START Input file:", delivered_language_codes[index], "#")
+                properties = read_properties(input_path, template, delivered_language_codes[index])
+                countries = list()
+                if country_specific_flag == 'y':
+                    countries = ask_for_countries(language)
+                    print(countries)
+                    manual = create_file(output_path, template, language, delivered_language_codes[index], properties,
+                                         countries, 0)
+                    if manual:
+                        print('For template', template, 'File with special language code', delivered_language_codes[index],
+                              'created. Manuel adjustments ''needed!')
+                        manual_counter += 1
+                # case only Global properties needed
+                else:
+                    manual = create_file(output_path, template, language, delivered_language_codes[index], properties,
+                                         ['GLOBAL'], 0)
+                    if manual:
+                        print('For template', template, 'File with special language code', delivered_language_codes[index],
+                              'created. Manuel adjustments ''needed!')
+                        manual_counter += 1
+        if manual_counter > 0:
+            print('\n', manual_counter, '''files with unclear language mapping, please adjust manually. In general the Mapping is as following:    
+            ENU -> en-US 
+            NLB -> nl-BE 
+            PTB -> pt-BR 
+            CHT -> zh-TW 
+            ZHH -> zh-HK and zh-MO        
+    If there is e.g. only a NLB file in the input, but no NLD file (means also no nl file is created) clarify with BA or 
+    customer if NLB should be used for all countries not only the above specified\n''')
+    print('\n ### Script ended, check Output folder ###')
